@@ -21,7 +21,7 @@ library(giscoR)
 library(stringr)
 library(eurostat)
 
-setwd("~/Desktop/BIOSECURE_FINAL_RISK_SCORE")
+setwd("~/Desktop/Funding 2025/Deliverables/untitled folder/Apenteng")
 
 # ---- 1. Download & unzip shapefile ----
 nuts_sf <- st_read("NUTS_RG_01M_2021_4326.shp/NUTS_RG_01M_2021_4326.shp")
@@ -29,64 +29,28 @@ nuts_sf <- st_read("NUTS_RG_01M_2021_4326.shp/NUTS_RG_01M_2021_4326.shp")
 nuts2_sf <- nuts_sf %>% filter(LEVL_CODE == 2)
 nuts2 = nuts2_sf
 
-AI_nuts2_outbreaks <- readRDS("AI_nuts2_outbreaks_poultry.rds")
+AI_nuts2_outbreaks<- readRDS("AI_nuts2_outbreaks_poultry.rds")
 
-write_xlsx(AI_nuts2_outbreaks, "AI_nuts2_outbreaks_poultry.xlsx")
-
-AI_nuts2_outbreaks <- AI_nuts2_outbreaks %>%
-  mutate(outbreak_status = ifelse(outbreak_count == 0,
-                                  "No Outbreak",
-                                  "Outbreak"))
-
-head(AI_nuts2_outbreaks)
-
-#----  Aalysis start from here-------------------
 AI_nuts2_outbreaks<- AI_nuts2_outbreaks %>%
   mutate(
-    # Free_range_layers_Mean_value = ifelse(is.na(Free_range_layers_Mean_value),
-    #                                       mean(Free_range_layers_Mean_value, na.rm = TRUE), Free_range_layers_Mean_value),
-    # Free_range_broilers_Mean_value = ifelse(is.na(Free_range_broilers_Mean_value),
-    #                                         mean(Free_range_broilers_Mean_value, na.rm = TRUE), Free_range_broilers_Mean_value),
+    Free_range_layers_Mean_value = ifelse(is.na(Free_range_layers_Mean_value),
+                                          mean(Free_range_layers_Mean_value, na.rm = TRUE), Free_range_layers_Mean_value),
+    Free_range_broilers_Mean_value = ifelse(is.na(Free_range_broilers_Mean_value),
+                                            mean(Free_range_broilers_Mean_value, na.rm = TRUE), Free_range_broilers_Mean_value),
     Broilers_Mean_value = ifelse(is.na(Broilers_Mean_value),
                                  mean(Broilers_Mean_value, na.rm = TRUE), Broilers_Mean_value),  
     Laying_hens_Mean_value = ifelse(is.na(Laying_hens_Mean_value),
                                     mean(Laying_hens_Mean_value, na.rm = TRUE), Laying_hens_Mean_value) 
   )
 
-#-------------------------------------------------
-# Scenario Decrease Biosecurity measures but glm names Indoor_Broilers_25up ND Indoor_Laying_25up haVE to change as well using this part
+AI_model_data <- AI_nuts2_outbreaks %>%
+  filter(!is.na(outbreak_count))
 
-#AI_nuts2_outbreaks <- AI_nuts2_outbreaks %>%
-#  mutate(
-#    Indoor_Broilers_25up = ifelse(outbreak_status == "Outbreak",
-#                                  Broilers_Mean_value * 0.8,
-#                                  Broilers_Mean_value),
-    
-#    Indoor_Laying_25up = ifelse(outbreak_status == "Outbreak",
- #                               Laying_hens_Mean_value * 0.8,
- #                               Laying_hens_Mean_value)
- # )
-#-------------------------------------------------
-
-# Step 2: Filter complete cases
-AI_model_data <- AI_nuts2_outbreaks%>%
-  filter(!is.na(outbreak_count),
-         #!is.na(poultry_density),
-         #!is.na(Free_range_layers_Mean_value),
-         #!is.na(land_cover_name),
-         #!is.na(Free_range_broilers_Mean_value),
-         !is.na(Broilers_Mean_value),
-         !is.na(Laying_hens_Mean_value))
-
-# Step 3: Create binary outcome
 AI_model_data_baseline <- AI_model_data %>%
   mutate(outbreak_binary = ifelse(outbreak_count > 0, 1, 0))
 
-# Step 4: Sample 50 cases and 50 controls
 cases <- AI_model_data_baseline %>% filter(outbreak_binary == 1)
 controls_all <- AI_model_data_baseline %>% filter(outbreak_binary == 0)
-
-# Beate
 
 n_controls <- 82
 controls <- if (nrow(controls_all) >= n_controls) {
@@ -96,12 +60,6 @@ controls <- if (nrow(controls_all) >= n_controls) {
 }
 AI_model_data_balanced_baseline<- bind_rows(cases, controls_all)
 
-#n_samples <- 82
-#sampled_cases <- sample_n(cases, n_samples)
-#sampled_controls <- sample_n(controls_all, n_samples, replace = TRUE)
-#AI_model_data_balanced_baseline <- bind_rows(sampled_cases, sampled_controls)
-
-# Step 5: Group land cover
 AI_model_data_balanced_baseline <- AI_model_data_balanced_baseline %>%
   mutate(grouped_land_cover = case_when(
     land_cover_name %in% c("Arable land", "Pastures", "Permanent crops") ~ "Agricultural",
@@ -114,7 +72,7 @@ AI_model_data_balanced_baseline <- AI_model_data_balanced_baseline %>%
 
 # Step 6: Fit logistic regression model
 logit_model_baseline <- glm(
-  outbreak_binary ~ poultry_density + grouped_land_cover + Broilers_Mean_value  + Laying_hens_Mean_value ,
+  outbreak_binary ~ poultry_density + grouped_land_cover + Broilers_Mean_value  + Laying_hens_Mean_value + Free_range_layers_Mean_value + Free_range_broilers_Mean_value,
   data = AI_model_data_balanced_baseline,
   family = binomial(link = "logit")
 )
@@ -131,7 +89,6 @@ odds_ratio_table_case_baseline <- broom.mixed::tidy(
 summary(logit_model_baseline)
 print(odds_ratio_table_case_baseline)
 
-# Step 9: Predict risk scores
 AI_model_data_balanced_baseline$risk_score <- predict(logit_model_baseline, newdata = AI_model_data_balanced_baseline, type = "response")
 
 # Step 10: Extract coordinates
@@ -163,8 +120,6 @@ regions_with_condition <- AI_joined_baseline %>%
             risk_available = any(!is.na(risk_score))) %>%
   filter((has_outbreak | has_control) & risk_available) %>%
   pull(NUTS_ID.y)
-
-# Step 14: Remove Malta (MT00)
 regions_with_condition <- regions_with_condition[regions_with_condition != "MT00"]
 
 # Step 15: Filter map and AI points
@@ -178,15 +133,15 @@ AI_filtered_baseline <- AI_joined_baseline %>%
 b_equl_baseline <- ggplot() +
   geom_sf(data = nuts2_map_baseline, fill = "lightgrey", color = "white") +
   geom_sf(data = nuts2_filtered_baseline, aes(fill = mean_risk), color = "white") +
- # geom_sf(data = AI_filtered_baseline |> filter(outbreak_binary == 1), 
+  # geom_sf(data = AI_filtered_baseline |> filter(outbreak_binary == 1), 
   #        aes(color = "Outbreak Cases"), shape = 16, size = 2) +
- # geom_sf(data = AI_filtered_baseline |> filter(outbreak_binary == 0), 
- #         aes(color = "Control Regions"), shape = 16, size = 2) +
+  # geom_sf(data = AI_filtered_baseline |> filter(outbreak_binary == 0), 
+  #         aes(color = "Control Regions"), shape = 16, size = 2) +
   scale_fill_viridis_c(name = "Risk scores", option = "inferno") +
- # scale_color_manual(
- #   name = "Outbreak Classification",
- #   values = c("Outbreak Cases" = "red", "Control Regions" = "blue")
- # ) +
+  # scale_color_manual(
+  #   name = "Outbreak Classification",
+  #   values = c("Outbreak Cases" = "red", "Control Regions" = "blue")
+  # ) +
   coord_sf(xlim = c(-10, 55), ylim = c(35, 70)) +
   theme_minimal() +
   labs(
@@ -207,3 +162,156 @@ ggsave(
   height = 8,
   dpi = 300
 )
+
+#---------------
+# create biosecurity risk maps
+df<- readRDS("AI_nuts2_outbreaks_poultry.rds")
+df <- df %>%
+  rowwise() %>%
+  mutate(
+    Combine_Biosecurity = mean(c_across(
+      c(
+        Free_range_layers_Mean_value,
+        Free_range_broilers_Mean_value,
+        Broilers_Mean_value,
+        Laying_hens_Mean_value
+      )
+    ), na.rm = TRUE),
+    Combine_Biosecurity = ifelse(is.nan(Combine_Biosecurity), NA, Combine_Biosecurity)
+  ) %>%
+  ungroup()
+
+#-------------------------------------------------
+# 3. Create outbreak_binary
+#-------------------------------------------------
+df <- df %>%
+  mutate(outbreak_binary = ifelse(outbreak_count > 0, 1, 0))
+
+logit_model <- glm(
+  outbreak_binary ~ Combine_Biosecurity,
+  data = df,
+  family = binomial(link = "logit")
+)
+
+df <- df %>%
+  mutate(predicted_prob = predict(logit_model, newdata = ., type = "response"))
+df_no_mt <- df %>% filter(NUTS_ID != "MT00")
+p_default <- ggplot(df_no_mt ) +
+  geom_sf(aes(fill = predicted_prob), color = "white", size = 0.1) +
+  scale_fill_viridis_c(option = "inferno", name = "Outbreak Probability") +
+  coord_sf(xlim = c(-25, 45), ylim = c(34, 72)) +  # EU extent
+  theme_minimal()
+
+library(sf)
+library(ggplot2)
+library(dplyr)
+
+# Transform df to WGS84 (EPSG:4326) if not already
+
+df <- st_transform(df, 4326)
+
+# Define Europe bounding box in WGS84
+
+bbox_europe <- st_sfc(st_polygon(list(rbind(
+  c(-25, 34),   # bottom-left
+  c(45, 34),    # bottom-right
+  c(45, 72),    # top-right
+  c(-25, 72),   # top-left
+  c(-25, 34)    # close polygon
+))), crs = st_crs(df))
+
+# Filter only regions intersecting Europe
+
+df_europe <- df[st_intersects(df, bbox_europe, sparse = FALSE)[,1], ]
+
+# Check that df_europe is not empty
+
+nrow(df_europe)
+
+# Predict probabilities
+
+df_europe <- df_europe %>%
+  mutate(predicted_prob = predict(logit_model, newdata = ., type = "response"))
+
+# Plot
+
+ggplot(df_europe) +
+  geom_sf(aes(fill = predicted_prob), color = "white", size = 0.1) +
+  scale_fill_viridis_c(option = "inferno", name = "Outbreak Probability", limits = c(0, 0.5)) +
+  coord_sf(xlim = c(-25, 45), ylim = c(34, 72)) +
+  theme_minimal()
+
+#-------------------------------------------------
+# 5. +20% and -20% Biosecuirty prediction risk maps
+#-------------------------------------------------
+library(dplyr)
+library(sf)
+library(ggplot2)
+library(gridExtra)
+library(grid)
+
+# Define Europe bounding box (approximate)
+
+bbox_europe <- st_sfc(st_polygon(list(rbind(
+  c(-25, 34), c(45, 34), c(45, 72), c(-25, 72), c(-25, 34)
+))), crs = st_crs(df))  # use CRS of your spatial data
+
+# Keep only regions intersecting Europe
+
+df_europe <- df[st_intersects(df, bbox_europe, sparse = FALSE)[,1], ]
+
+#-----------------------------------------------------------
+# Calculate +20% and -20% biosecurity predicted probabilities
+
+df_up <- df_europe %>%
+  mutate(predicted_prob = predict(
+    logit_model,
+    newdata = data.frame(Combine_Biosecurity = Combine_Biosecurity * 1.2),
+    type = "response"
+  ))
+
+df_down <- df_europe %>%
+  mutate(predicted_prob = predict(
+    logit_model,
+    newdata = data.frame(Combine_Biosecurity = Combine_Biosecurity * 0.8),
+    type = "response"
+  ))
+
+# Ensure they are sf objects
+
+df_up <- st_as_sf(df_up)
+df_down <- st_as_sf(df_down)
+
+# Shared color scale
+
+prob_limits <- c(0, 0.5)
+
+# Create plots
+
+p_minus20 <- ggplot(df_down) +
+  geom_sf(aes(fill = predicted_prob), color = "white", size = 0.1) +
+  scale_fill_viridis_c(option = "inferno", limits = prob_limits, name = "Outbreak Probability") +
+  theme_minimal() +
+  labs(title = "a) -20% Biosecurity")
+
+p_plus20 <- ggplot(df_up) +
+  geom_sf(aes(fill = predicted_prob), color = "white", size = 0.1) +
+  scale_fill_viridis_c(option = "inferno", limits = prob_limits, name = "Outbreak Probability") +
+  theme_minimal() +
+  labs(title = "b) +20% Biosecurity")
+
+# Optional: add labels above plots
+
+label_a <- textGrob("a) -20% Biosecurity", gp = gpar(fontsize = 14, fontface = "bold"))
+label_b <- textGrob("b) +20% Biosecurity", gp = gpar(fontsize = 14, fontface = "bold"))
+
+# Arrange side by side
+
+grid.arrange(
+  arrangeGrob(label_a, p_minus20, ncol = 1, heights = c(0.1, 0.9)),
+  arrangeGrob(label_b, p_plus20, ncol = 1, heights = c(0.1, 0.9)),
+  ncol = 2
+)
+
+
+
